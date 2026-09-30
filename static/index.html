@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teach-Back Coach</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--card:#f4f4f6;--mut:#666;--acc:#b3131b}
+@media(prefers-color-scheme:dark){:root{--bg:#161618;--fg:#eee;--card:#232326;--mut:#aaa}}
+body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:820px;margin:0 auto;padding:20px}
+.card{background:var(--card);border-radius:10px;padding:16px;margin:12px 0}
+button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:15px;cursor:pointer}
+button.alt{background:transparent;color:var(--fg);border:1px solid var(--mut)}
+textarea{width:100%;box-sizing:border-box;min-height:70px;padding:8px;border-radius:8px;border:1px solid var(--mut);background:var(--bg);color:var(--fg);font:inherit}
+.m{margin:8px 0;padding:8px 12px;border-radius:8px}.u{background:var(--bg)}.a{border-left:3px solid var(--acc)}
+#map{display:flex;flex-wrap:wrap;gap:6px}.chip{padding:5px 10px;border-radius:14px;font-size:13px;background:#888;color:#fff}
+.correct{background:#2e8b57}.partial{background:#d9922b}.wrong{background:#b3131b}
+.bar{height:14px;border-radius:7px;background:var(--acc)}.hide{display:none}
+</style></head><body>
+<h1>Teach-Back Coach</h1>
+<div id="s-lesson" class="card"><h3>Lesson</h3><p id="lesson"></p><button onclick="show('s-conf')">I've read it</button></div>
+<div id="s-conf" class="card hide"><h3>How confident are you that you could explain this to a newcomer?</h3>
+<p>1 = not at all, 5 = completely</p><div id="cbtns"></div></div>
+<div id="s-chat" class="hide">
+ <div class="card"><b>Concept map</b><div id="map"></div></div>
+ <div class="card"><p>Explain how a staged attack works to a curious newcomer.</p><div id="log"></div>
+ <div id="box"><textarea id="in" placeholder="Type your explanation..."></textarea>
+ <p><button onclick="send()">Send</button> <button class="alt" onclick="finish()">I'm done</button></p></div>
+ <p id="wait" class="hide">Newcomer is thinking...</p></div></div>
+<div id="s-coach" class="hide">
+ <div class="card"><b>Feedback</b><div id="cfb">Thinking...</div></div>
+ <div class="card hide" id="qcard"><b>Question for you</b><p id="cq"></p>
+ <div id="cbox"><textarea id="cin" placeholder="Think, then reply, ask a question, or say 'just tell me'..."></textarea>
+ <p><button onclick="reflect()">Reply</button></p></div><p id="cwait" class="hide">Coach is thinking...</p></div>
+ <p id="cont" class="hide"><button onclick="reflect(true)">See results</button></p></div>
+<div id="s-res" class="hide"></div>
+<script>
+let sid,names={};const $=id=>document.getElementById(id);
+const show=id=>{["s-lesson","s-conf","s-chat","s-coach","s-res"].forEach(x=>$(x).classList.add("hide"));$(id).classList.remove("hide")};
+const post=(u,b)=>fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(async r=>{const t=await r.text();try{return JSON.parse(t)}catch{return{error:t}}});
+fetch("/api/content").then(r=>r.json()).then(d=>{$("lesson").textContent=d.lesson;names=d.ideas;drawMap({})});
+for(let i=1;i<=5;i++){const b=document.createElement("button");b.textContent=i;b.style.marginRight="6px";b.onclick=()=>begin(i);$("cbtns").appendChild(b)}
+async function begin(c){sid=(await post("/api/start",{confidence:c})).sid;show("s-chat")}
+function drawMap(g){$("map").innerHTML=Object.keys(names).map(k=>`<span class="chip ${(g[k]||{}).status||""}">${names[k]}</span>`).join("")}
+function add(el,cls,t){const d=document.createElement("div");d.className="m "+cls;d.textContent=t;$(el).appendChild(d)}
+
+async function send(){const t=$("in").value.trim();if(!t)return;$("in").value="";add("log","u",t);
+                    $("box").classList.add("hide");$("wait").classList.remove("hide");
+                    try{const r=await post("/api/explain",{sid,message:t});if(r.error)throw new Error(r.error);
+                    drawMap(r.grade);add("log","a",r.reply);if(r.done){finish();return}
+                    }catch(e){add("log","a","Error: "+e.message)}
+                    $("wait").classList.add("hide");$("box").classList.remove("hide")}
+
+async function finish(){show("s-coach");
+                        try{const r=await post("/api/feedback",{sid});if(r.error)throw new Error(r.error);
+                        $("cfb").textContent=r.feedback;
+                        if(r.question){$("cq").textContent=r.question;$("qcard").classList.remove("hide")}
+                        else $("cont").classList.remove("hide")}
+                        catch(e){$("cfb").textContent="Error: "+e.message}}
+
+async function reflect(skip){const t=skip?"":$("cin").value.trim();if(!skip&&!t)return;
+                            $("cbox").classList.add("hide");$("cwait").classList.remove("hide");$("cont").classList.add("hide");
+                            try{const r=await post("/api/reflect",{sid,message:t});if(r.error)throw new Error(r.error);result(r)}
+                            catch(e){$("cwait").textContent="Error: "+e.message}}
+                            
+function result(r){show("s-res");const p=x=>Math.round(x*100);
+ const R={lesson_full:"Back to the lesson, in small chunks.",lesson_targeted_reveal:"You felt sure, but key ideas were off. Review these before trying again.",
+  lesson_targeted:"Close. Review only the ideas you missed, then explain again.",sim_guided:"Well explained, and you were unsure. Next: a guided practice shift.",
+  sim_unguided:"Solid and confident. Next: an unguided practice shift."};
+ let h=(r.reply?`<div class="card"><b>Coach</b><p>${r.reply}</p></div>`:"")+`<div class="card"><h3>Route: ${R[r.route]}</h3>`;
+ if(r.route.startsWith("sim"))h+=`<p><b>Practice: "Night shift at Kestrel Logistics"</b> (designed, not built yet). You would classify 7 alerts by tactic and choose how to contain the attack.</p>`;
+ else h+=r.missed.map(m=>`<p><b>${m.name}</b><br>${m.fix}</p>`).join("");
+ h+=`</div><div class="card"><h3>Calibration</h3>Confidence <div class="bar" style="width:${p(r.c)}%"></div> ${p(r.c)}%<br><br>
+ Understanding (routing score) <div class="bar" style="width:${p(r.k)}%"></div> ${p(r.k)}%
+ <p>Independent: ${p(r.k1)}% &rarr; after coach: ${p(r.k2)}%. ${r.miscalibrated?(r.gap>0?"You were overconfident.":"You were underconfident."):"Your confidence was well calibrated."}</p>
+ ${r.prompted.length?`<p>Recovered with a hint: ${r.prompted.join(", ")}</p>`:""}</div>
+ <button onclick="location.reload()">Explain again</button>`;
+ $("s-res").innerHTML=h}
+</script></body></html>
